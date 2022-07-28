@@ -1,0 +1,1 @@
+#define STR "Robert Aldis"
