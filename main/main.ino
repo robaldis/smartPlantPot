@@ -24,28 +24,38 @@ Instructions:
 #include "LittleFS.h"
 #include <PubSubClient.h>
 #include <Vector.h>
+#include <DHT.h>
 
 #define HOSTNAME "ESP_Planter"
+#define DHTType DHT11
+
+int DHTPin = D6;
+int LEDPin = D0;
+int lightPin = A0;
+int waterPin = D7;
+
+DHT dht(DHTPin, DHT11);
 
 String ssid;
 String password;
 String hostname = HOSTNAME;
-String group = "/office";
+String group;
 String mqttServer;
-String clientID = HOSTNAME;
-String mqttUsername = "homeassistant";
-String mqttPass = "tunoosa4jauvaiyakeit1aif9ahthieH1EiZ5Aol3Bee2xahx4rubiedoohae6Ac";
+String clientID;
+String mqttUsername;
+String mqttPass;
+// "homeassistant"
+// "tunoosa4jauvaiyakeit1aif9ahthieH1EiZ5Aol3Bee2xahx4rubiedoohae6Ac"
+String device_topic;
 int count;
-
-String device_topic = group + "/devices";
 
 int maxDevices = 32;
 int numDevices = 1;
-String str[32] = {HOSTNAME};
-int tmp[32];
-int hmd[32];
-int light[32];
-int water[32];
+String deviceNames[32] = {HOSTNAME};
+int temp_arr[32];
+int hmd_arr[32];
+int light_arr[32];
+int water_arr[32];
 
 IPAddress IP;
 
@@ -59,14 +69,44 @@ void setup(void) {
     Serial.begin(115200);
     Serial.println("");
     LittleFS.begin();
+    dht.begin();
+    pinMode(LEDPin, OUTPUT);
 
-    String config_data = load_from_file("data.conf");
+    String config_data = load_from_file("config");
     if (config_data != "") {
-        int index = config_data.indexOf(",");
+        int index = config_data.indexOf(":");
         hostname= config_data.substring(0, index);
-        mqttServer = config_data.substring(index+1, config_data.length());
-        mqttServer = "192.168.253.76";
+        clientID = hostname;
+        deviceNames[0] = hostname;
+
+        config_data= config_data.substring(index+1);
+
+        index = config_data.indexOf(":");
+        ssid = config_data.substring(0, index);
+        config_data= config_data.substring(index+1);
+
+        index = config_data.indexOf(":");
+        password = config_data.substring(0, index);
+        config_data= config_data.substring(index+1);
+
+        index = config_data.indexOf(":");
+        group = config_data.substring(0, index);
+        config_data= config_data.substring(index+1);
+
+        index = config_data.indexOf(":");
+        mqttServer = config_data.substring(0, index);
+        config_data= config_data.substring(index+1);
+
+        index = config_data.indexOf(":");
+        mqttUsername = config_data.substring(0, index);
+        config_data= config_data.substring(index+1);
+
+        mqttPass = config_data.substring(0);
     }
+    device_topic = group + "/devices";
+
+    Serial.println(group);
+    Serial.println(hostname);
 
     setup_wifi();
     setup_http_server();
@@ -82,21 +122,18 @@ void loop(void) {
         mqttReconnect();
     }
     mqttClient.loop();
-    if (count % 1000 == 0) {
+
+    if (count > 500000) {
+        mqttClient.publish(device_topic.c_str(), clientID.c_str());
+        count = 0;
         updateSensors();
     }
     count++;
 }
 
 void setup_wifi() {
-    String file = load_from_file("wifi.conf");
-
-    if (file != "") {
+    if (ssid != "") {
         Serial.println("Connecting to WiFi");
-        int index = file.indexOf(":");
-        int len = file.length();
-        ssid = file.substring(0, index);
-        password = file.substring(index + 1, len);
         // Connect to WiFi network
         WiFi.mode(WIFI_STA);
         WiFi.begin(ssid, password);
@@ -154,8 +191,14 @@ void setup_http_server(){
     server.on("/ap", ap);
     server.on("/setup", config_GET);
     server.on("/setup_form", config_POST);
+    server.on("/reset", resetConfig);
     server.begin();
     Serial.println("TCP server started");
+}
+
+void resetConfig() {
+    write_to_file("config","");
+    server.send(200, "text/plain", "DONE");
 }
 
 void setup_mqtt() {
@@ -203,17 +246,26 @@ void config_POST() {
         else if (server.argName(i) == "ssid") {
             ssid = server.arg(i);
         }
+        else if (server.argName(i) == "mqtt_ip") {
+            mqttServer = server.arg(i);
+        }
+        else if (server.argName(i) == "mqtt_user") {
+            mqttUsername = server.arg(i);
+        }
+        else if (server.argName(i) == "mqtt_pass") {
+            mqttPass = server.arg(i);
+        }
+        else if (server.argName(i) == "group") {
+            group = server.arg(i);
+        }
     }
     save_all();
     server.send(200, "text/plain", "DONE");
 }
 
 void save_all() {
-    String output = ssid + ":" + password;
-    write_to_file("wifi.conf", output);
-
-    output = hostname + "," + mqttServer;
-    write_to_file("data.conf", output);
+    String output = hostname + ":" + ssid + ":" + password + ":" + group + ":" + mqttServer + ":" + mqttUsername + ":" + mqttPass;
+    write_to_file("config", output);
 }
 
 
@@ -269,22 +321,22 @@ void mqttMessage(char* topic, byte* payload, unsigned int length) {
         index = s.indexOf("/");
         String device = s.substring(0, index);
         String sensor = s.substring(index+1);
-        for (int i = 0; i < maxDevices; i++) {
+        for (int i = 1; i < maxDevices; i++) {
             // Tokenise and compare against the known devices
             // AND what sensor we are reciveving
-            if (device == str[i]) {
+            if (device == deviceNames[i]) {
                 if (sensor == "temp") {
                     Serial.println("TEMP");
-                    tmp[i] = msg.toInt();
+                    temp_arr[i] = msg.toInt();
 
                 } else if (sensor == "hmd") {
-                    hmd[i] = msg.toInt();
+                    hmd_arr[i] = msg.toInt();
 
                 } else if (sensor == "light") {
-                    light[i] = msg.toInt();
+                    light_arr[i] = msg.toInt();
 
                 } else if (sensor == "water") {
-                    water[i] = msg.toInt();
+                    water_arr[i] = msg.toInt();
 
                 }
             }
@@ -296,7 +348,7 @@ void addDeviceName(String msg) {
     // Add to devices
     bool found = false;
     for (int i = 0; i < maxDevices; i++) {
-        if (str[i] == msg) {
+        if (deviceNames[i] == msg) {
             Serial.println("FOUND");
             found = true;
         }
@@ -306,7 +358,7 @@ void addDeviceName(String msg) {
             Serial.println("Cannot add any more devices");
         } else {
             Serial.println("ADDING");
-            str[numDevices] = msg;
+            deviceNames[numDevices] = msg;
             numDevices++;
             Serial.println(msg);
             subscribeToDevice(msg);
@@ -322,23 +374,42 @@ void subscribeToDevice(String device) {
 
 
 void mqttReconnect() {
-    while(!mqttClient.connected()) {
-        if (mqttClient.connect(clientID.c_str(), mqttUsername.c_str(), mqttPass.c_str())) {
-            Serial.println("MQTT connected");
-            mqttClient.subscribe((group + "/plant1/temp").c_str());
-            mqttClient.subscribe(device_topic.c_str());
-            mqttClient.publish((group + "/plant1/temp").c_str(), "1000");
-        } else {
-            Serial.println("Failed to connect to mqtt trying again");
-            delay(5000);
-        }
+    if (mqttClient.connect(clientID.c_str(), mqttUsername.c_str(), mqttPass.c_str())) {
+        Serial.println("MQTT connected");
+        mqttClient.subscribe(device_topic.c_str());
+    } else {
+        Serial.println("Failed to connect to mqtt trying again");
+        delay(5000);
     }
 }
 
 
 void updateSensors() {
+    int temp = dht.readTemperature(0);
+    int hmd = dht.readHumidity();
+    int light = analogRead(lightPin);
+    int water = analogRead(waterPin);
+    Serial.print("TEMP: ");
+    Serial.println(temp);
+    Serial.print("HUMIDITY: ");
+    Serial.println(hmd);
+    Serial.print("LIGHT: ");
+    Serial.println(light);
+    Serial.print("WATER: ");
+    Serial.println(water);
 
-    // pubSensorData(tmp, hmd, light, water);
+    temp_arr[0] = temp;
+    hmd_arr[0] = hmd;
+    light_arr[0] = light;
+    water_arr[0] = water;
+
+    if (water == 0) {
+        digitalWrite(LEDPin, LOW);
+    } else {
+        digitalWrite(LEDPin, HIGH);
+    }
+
+    pubSensorData(temp, hmd, light, water);
 }
 
 
@@ -348,8 +419,8 @@ void pubSensorData(int tmp, int hmd, int light, int water) {
     String lightTopic = group + "/" + hostname + "/light";
     String waterTopic = group + "/" + hostname + "/water";
 
-    // mqttClient.publish(tmpTopic, tmp);
-    // mqttClient.publish(hmdTopic, hmd);
-    // mqttClient.publish(lightTopic, light);
-    // mqttClient.publish(waterTopic, water);
+    mqttClient.publish(tmpTopic.c_str(), String(tmp).c_str());
+    mqttClient.publish(hmdTopic.c_str(), String(hmd).c_str());
+    mqttClient.publish(lightTopic.c_str(), String(light).c_str());
+    mqttClient.publish(waterTopic.c_str(), String(water).c_str());
 }
