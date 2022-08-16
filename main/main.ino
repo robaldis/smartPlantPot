@@ -16,6 +16,7 @@
 #include "LittleFS.h"
 #include <PubSubClient.h>
 #include <DHT.h>
+#include <ArduinoJson.h>
 
 #define HOSTNAME "ESP_Planter"
 #define DHTType DHT11
@@ -44,14 +45,15 @@ IPAddress IP;
 // Device managment variables
 int maxDevices = 3;
 int numDevices = 1; // Starts at 1 it holds itself as a device
-String deviceNames[maxDevices] = {HOSTNAME}; // keep track of itself
+String deviceNames[3] = {HOSTNAME}; // keep track of itself
                                              // Lists that will hold sensor data for all devices
-int temp_arr[maxDevices];
-int hmd_arr[maxDevices];
-int light_arr[maxDevices];
-int water_arr[maxDevices];
+int temp_arr[3];
+int hmd_arr[3];
+int light_arr[3];
+int water_arr[3];
 
 // Setup librarys
+DynamicJsonDocument doc(1024);
 DHT dht(DHTPin, DHT11);
 ESP8266WebServer server(80); // port 80
 WiFiClient espClient;
@@ -59,7 +61,7 @@ PubSubClient mqttClient(espClient);
 
 
 void setup(void) {
-    Serial.begin(115200);
+    Serial.begin(9600);
     Serial.println("");
     LittleFS.begin();
     dht.begin();
@@ -100,12 +102,13 @@ void loop(void) {
 }
 
 
-void load_config(file) {
+void load_config(String file) {
     /*
     Load config data from a file and retreive data. config file NEEDS to be in 
     the correct format to be properly parsed.
     */
     String config_data = load_from_file(file);
+    Serial.println(config_data);
     if (config_data != "") {
         int index = config_data.indexOf(":");
         hostname= config_data.substring(0, index);
@@ -141,6 +144,9 @@ void load_config(file) {
         needsSetup = checkEmpty(mqttUsername);
 
         mqttPass = config_data.substring(0);
+    }
+    else {
+      needsSetup = true;
     }
 }
 
@@ -230,6 +236,7 @@ void setup_http_server(){
     server.on("/setup", config_GET);
     server.on("/setup_form", config_POST);
     server.on("/reset", resetConfig);
+    server.on("/json", jsonData);
     server.begin();
     Serial.println("TCP server started");
 }
@@ -250,13 +257,21 @@ void handle_index() {
     /*
     Handles what happens when the root endpoint is reached
     */
-    
+    Serial.println("SOMETHING");
+    Serial.println(needsSetup);
     if (needsSetup) {
         // get to config settings page
+        Serial.println("Needs setup");
         config_GET();
     } else {
         // Show index.html
         String index = load_from_file("index.html");
+        for (int i = 0; i < numDevices; i++) { 
+            char buffer[200];
+            String dash = load_from_file("dashboard.html");
+            sprintf(buffer, dash.c_str(), deviceNames[i], light_arr[i], temp_arr[i], hmd_arr[i], water_arr[i]);
+            index = index + buffer;
+        }
         server.send(200, "text/html", index);
     }
 }
@@ -317,6 +332,14 @@ void resetConfig() {
     // Write an empty string to the file clearing the contents
     write_to_file("config","");
     server.send(200, "text/plain", "DONE");
+}
+
+void jsonData() {
+    jsonSensors();
+    String jsonStr;
+    serializeJsonPretty(doc, jsonStr);
+
+    server.send(200, "application/json", jsonStr);
 }
 
 // --------------------------------------------------------------------
@@ -529,5 +552,26 @@ void updateSensors() {
     pubSensorData(temp, hmd, light, water);
 }
 
+void jsonSensors() {
+    doc["content-Type"] = "application/json";
+    doc["Status"] = 200;
 
+    JsonObject device = doc.createNestedObject("device");
+    device["deviceName"] = hostname;
 
+    JsonObject lightSensor = device.createNestedObject("light");
+    lightSensor["sensorName"] = "light";
+    lightSensor["sensorValue"] = light_arr[0];
+
+    JsonObject tempSensor = device.createNestedObject("temp");
+    tempSensor["sensorName"] = "temp";
+    tempSensor["sensorValue"] = temp_arr[0];
+
+    JsonObject humiditySensor = device.createNestedObject("humidity");
+    humiditySensor["sensorName"] = "humidity";
+    humiditySensor["sensorValue"] = hmd_arr[0];
+
+    JsonObject waterSensor = device.createNestedObject("water");
+    waterSensor["sensorName"] = "water";
+    waterSensor["sensorValue"] = water_arr[0];
+}
