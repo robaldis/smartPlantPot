@@ -211,6 +211,7 @@ void connect_ap() {
 
 
 void setup_mdns() {
+    // From example mDNS_Web_Server
     // Set up mDNS responder:
     // - first argument is the domain name, in this example
     //   the fully-qualified domain name is "esp8266.local"
