@@ -23,7 +23,8 @@
 
 // Define Pins
 int DHTPin = D6;
-int LEDPin = D0;
+int LEDPinIndicator = D0;
+int LEDPinLight = D1;
 int lightPin = A0;
 int waterPin = D7;
 
@@ -36,6 +37,7 @@ String mqttServer;
 String clientID;
 String mqttUsername;
 String mqttPass;
+int lightThreshold;
 
 String device_topic;
 int count; // Keep track of when to update sensors
@@ -65,9 +67,10 @@ void setup(void) {
     Serial.println("");
     LittleFS.begin();
     dht.begin();
-    pinMode(LEDPin, OUTPUT);
+    pinMode(LEDPinIndicator, OUTPUT);
+    pinMode(LEDPinLight, OUTPUT);
 
-    load_config("config");
+    load_data();
     // Set the topic to find new devices on the network for its specific group
     device_topic = group + "/devices";
 
@@ -102,11 +105,12 @@ void loop(void) {
 }
 
 
-void load_config(String file) {
+void load_data() {
     /*
     Load config data from a file and retreive data. config file NEEDS to be in 
     the correct format to be properly parsed.
     */
+    String file = "config";
     String config_data = load_from_file(file);
     Serial.println(config_data);
     if (config_data != "") {
@@ -147,6 +151,13 @@ void load_config(String file) {
     }
     else {
       needsSetup = true;
+    }
+    file = "lightThreshold";
+    String lightValue = load_from_file(file);
+    if (lightValue) {
+        lightThreshold = lightValue.toInt();
+    } else {
+        lightThreshold = 0;
     }
 }
 
@@ -258,8 +269,6 @@ void handle_index() {
     /*
     Handles what happens when the root endpoint is reached
     */
-    Serial.println("SOMETHING");
-    Serial.println(needsSetup);
     if (needsSetup) {
         // get to config settings page
         Serial.println("Needs setup");
@@ -267,6 +276,9 @@ void handle_index() {
     } else {
         // Show index.html
         String index = load_from_file("index.html");
+        char buffer[200];
+        sprintf(buffer, index.c_str(), lightThreshold);
+        index = buffer;
         for (int i = 0; i < numDevices; i++) { 
             char buffer[200];
             String dash = load_from_file("dashboard.html");
@@ -323,6 +335,16 @@ void config_POST() {
     }
     save_config();
     server.send(200, "text/plain", "DONE");
+}
+
+void updateLightThreshold() {
+    Serial.println("POST sent");
+    for (uint8_t i = 0; i < server.args(); i++) { 
+        if (server.argName(i) == "lightThreshold") {
+            lightThreshold = server.arg(i).toInt();
+            write_to_file("light", String(lightThreshold));
+        }
+    }
 }
 
 
@@ -544,9 +566,14 @@ void updateSensors() {
 
     // Set LED indicator if water is out
     if (water == 0) {
-        digitalWrite(LEDPin, LOW);
+        digitalWrite(LEDPinIndicator, LOW);
     } else {
-        digitalWrite(LEDPin, HIGH);
+        digitalWrite(LEDPinIndicator, HIGH);
+    }
+    if (light <= lightThreshold) {
+        digitalWrite(LEDPinLight, HIGH);
+    }else {
+        digitalWrite(LEDPinLight, LOW);
     }
 
     // Publish over the MQTT protocol
